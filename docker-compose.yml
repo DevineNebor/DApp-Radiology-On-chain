@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # Base de données PostgreSQL (optionnel, remplace SQLite)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: radiology_dapp
+      POSTGRES_USER: radiology_user
+      POSTGRES_PASSWORD: radiology_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - radiology_network
+    profiles:
+      - production
+
+  # Backend FastAPI
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=sqlite:///./radiology_dapp.db
+      - BLOCKCHAIN_URL=http://hardhat:8545
+      - CONTRACT_ADDRESS=${CONTRACT_ADDRESS}
+      - PRACTITIONER_PRIVATE_KEY=${PRACTITIONER_PRIVATE_KEY}
+    volumes:
+      - ./backend:/app
+      - backend_data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - hardhat
+    networks:
+      - radiology_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend React
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_NETWORK_ID=1337
+      - REACT_APP_CONTRACT_ADDRESS=${CONTRACT_ADDRESS}
+      - REACT_APP_RPC_URL=http://localhost:8545
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - radiology_network
+    command: npm start
+
+  # Hardhat Network (Blockchain locale)
+  hardhat:
+    build:
+      context: ./contracts
+      dockerfile: Dockerfile
+    environment:
+      - NETWORK_ID=1337
+    volumes:
+      - ./contracts:/app
+      - hardhat_data:/app/data
+    ports:
+      - "8545:8545"
+    networks:
+      - radiology_network
+    command: npx hardhat node --hostname 0.0.0.0
+
+  # Service de déploiement des contrats
+  contract-deployer:
+    build:
+      context: ./contracts
+      dockerfile: Dockerfile
+    environment:
+      - NETWORK_ID=1337
+    volumes:
+      - ./contracts:/app
+    depends_on:
+      - hardhat
+    networks:
+      - radiology_network
+    profiles:
+      - deploy
+    command: sh -c "sleep 10 && npx hardhat run scripts/deploy.js --network localhost"
+
+  # Nginx (reverse proxy pour la production)
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - radiology_network
+    profiles:
+      - production
+
+volumes:
+  postgres_data:
+  backend_data:
+  hardhat_data:
+
+networks:
+  radiology_network:
+    driver: bridge
